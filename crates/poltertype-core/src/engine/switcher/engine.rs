@@ -14,7 +14,6 @@ use poltertype_layout::{LayoutId, LayoutSwitcher};
 use poltertype_types::Modifiers;
 
 use crate::audio::AudioPlayer;
-use crate::commands::WordHistory;
 use crate::engine::enums::SwitcherEvent;
 use crate::engine::types::{ChordState, KeystreamHotkeys, LastWord, PendingSuggestion};
 use crate::layouts::LayoutDb;
@@ -45,12 +44,6 @@ pub struct SwitcherEngine {
     pub(super) audio: Arc<AudioPlayer>,
     pub(super) out_tx: Sender<SwitcherEvent>,
     pub(super) paused: Arc<RwLock<bool>>,
-    /// The last few completed words, so a smart-command trigger can span
-    /// more than one (`best regards`). Bounded by length, idle timeout
-    /// and focus change, because this is the one place the engine holds
-    /// more of the user's text than the word being typed. See
-    /// [`crate::commands::phrase`].
-    pub(super) word_history: Arc<RwLock<WordHistory>>,
     /// Buffer of the previous fully-completed word (for "switch-last").
     pub(super) last_word: Arc<RwLock<Option<LastWord>>>,
     /// When the last force-switch finished. See [`FORCE_SWITCH_REARM`].
@@ -169,7 +162,6 @@ impl SwitcherEngine {
             audio,
             out_tx,
             paused: Arc::new(RwLock::new(start_paused)),
-            word_history: Arc::new(RwLock::new(WordHistory::default())),
             last_word: Arc::new(RwLock::new(None)),
             last_force_switch: RwLock::new(None),
             chord_state: Mutex::new(ChordState::default()),

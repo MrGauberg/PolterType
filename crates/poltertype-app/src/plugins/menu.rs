@@ -42,6 +42,7 @@ pub struct MenuRow {
 /// the same way: a line with no tab is an id that is its own label, blank
 /// lines are skipped, and a row with no id is dropped because there would
 /// be nothing to act on.
+#[cfg(test)]
 pub fn parse_rows(text: &str) -> Vec<MenuRow> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
@@ -393,10 +394,6 @@ impl PluginMenu {
     /// the heartbeat runs at all.
     pub fn reports_state(&self) -> bool {
         !self.stateful.is_empty() || !self.lists.is_empty()
-    }
-
-    pub fn extensions(&self) -> &[DiscoveredExtension] {
-        &self.extensions
     }
 }
 

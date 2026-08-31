@@ -94,10 +94,30 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
-      # The release installers compile the AI subsystem in
-      # (`--features ai,poltertype-ai/remote` in release.yml). Lint and
-      # test that feature set here too, or a change main CI never saw
-      # can break the next release build.
-      - run: cargo clippy -p poltertype-ai --features remote --all-targets --locked -- -D warnings
-      - run: cargo clippy -p poltertype-app --features ai,poltertype-ai/remote --all-targets --locked -- -D warnings
-      - run: cargo test -p poltertype-ai --features remote --locked
+      - name: Work-build privacy dependency guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree="$(cargo tree -p poltertype-app --locked)"
+          forbidden=' (ureq|reqwest|arboard|poltertype-update|poltertype-ai) v'
+
+          if grep -E "$forbidden" <<<"$tree"; then
+            echo "::error::forbidden privacy-sensitive dependency found in poltertype-app default graph"
+            grep -E "$forbidden" <<<"$tree" || true
+            exit 1
+          fi
+
+          if git grep -n -E 'std::process::Command|Command::new' -- \
+            crates/poltertype-app/src/plugins/supervisor.rs \
+            crates/poltertype-core/src/commands/shell.rs
+          then
+            echo "::error::process execution returned to a Work-build runtime surface"
+            exit 1
+          fi
+
+          if git grep -n -E 'poltertype-ai/remote|--features[[:space:]][^#]*ai' -- \
+            .github/workflows/release.yml
+          then
+            echo "::error::AI feature returned to the official release workflow"
+            exit 1
+          fi

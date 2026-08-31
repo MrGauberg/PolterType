@@ -171,34 +171,6 @@ pub(crate) fn spawn_error_notification(body: String) {
         .ok();
 }
 
-/// "PolterType 0.4.0 is ready — it will install when you restart."
-///
-/// Not gated by `[general].show_notifications`, for the same reason
-/// [`spawn_error_notification`] is not. Fires at most once per released
-/// version, and it is the only thing that tells a user who never opens
-/// the tray menu that an update is waiting.
-pub(crate) fn spawn_update_notification(version: &str) {
-    let body = format!(
-        "Version {version} is downloaded and ready.\n\
-         It will be installed the next time you restart PolterType — \
-         or click \"Restart to update\" in the tray menu."
-    );
-    std::thread::Builder::new()
-        .name("poltertype-notify-update".into())
-        .spawn(move || {
-            let mut n = notify_rust::Notification::new();
-            n.summary(APP_NAME)
-                .body(&body)
-                .appname(APP_NAME)
-                .icon(poltertype_shell::DESKTOP_ID)
-                .timeout(notify_rust::Timeout::Milliseconds(8000));
-            if let Err(e) = n.show() {
-                warn!(?e, "could not show the update-ready notification");
-            }
-        })
-        .ok();
-}
-
 pub(crate) fn spawn_event_bridges(
     proxy: EventLoopProxy<UserEvent>,
     engine_rx: Receiver<SwitcherEvent>,

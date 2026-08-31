@@ -1,6 +1,6 @@
 //! The focus-tracking extension point.
 
-use super::types::{CaretHint, FocusedWindowGeometry};
+use super::types::{CaretHint, FocusedWindowGeometry, SensitiveInput};
 
 /// Best-effort identifier of the currently-focused application.
 pub trait FocusTracker: Send + Sync {
@@ -31,6 +31,16 @@ pub trait FocusTracker: Send + Sync {
     /// then the better answer.
     fn caret_hint(&self) -> Option<CaretHint> {
         None
+    }
+
+    /// Classify the currently focused input target for privacy.
+    ///
+    /// Non-Windows backends keep their existing behaviour for now. The
+    /// Windows backend returns `Unknown` when UI Automation/native
+    /// control inspection cannot prove the field safe; the engine treats
+    /// that state as sensitive when password-field protection is enabled.
+    fn sensitive_input(&self) -> SensitiveInput {
+        SensitiveInput::NotSensitive
     }
 
     fn backend_name(&self) -> &'static str;

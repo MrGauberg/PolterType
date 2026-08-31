@@ -1070,80 +1070,6 @@ impl SettingsApp {
                 .color(b.muted),
             );
 
-        // This card is the app's disclosure surface for the one thing it
-        // does that reaches outside the machine, so it names the exact
-        // URL rather than saying "checks for updates" and leaving the
-        // user to trust us.
-        let u = &self.settings.updates;
-        // `on_press` only when updates are on: an iced Button with no
-        // handler renders disabled, which is exactly the signal wanted
-        // — with checking off, the interval means nothing.
-        let step = |label: &'static str, delta: i64| {
-            let btn = Button::new(Text::new(label).size(12))
-                .style(theme::secondary)
-                .padding(Padding {
-                    top: 4.0,
-                    right: 8.0,
-                    bottom: 4.0,
-                    left: 8.0,
-                });
-            if u.enabled {
-                btn.on_press(Message::UpdateIntervalDelta(delta))
-            } else {
-                btn
-            }
-        };
-        let interval_row = Row::new()
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .push(Text::new(tr("general.check_every_hours", "Check every (hours):")).size(13))
-            .push(step("-1", -1))
-            .push(
-                Text::new(format!("{:>3}", u.check_interval_hours))
-                    .size(13)
-                    .font(Font::MONOSPACE)
-                    .color(if u.enabled { b.ink } else { b.muted }),
-            )
-            .push(step("+1", 1));
-
-        let mut updates = Column::new()
-            .spacing(12)
-            .push(section_title(b, tr("general.updates", "Updates")))
-            .push(
-                Checkbox::new(u.enabled)
-                    .label(tr(
-                        "general.download_new_versions_automatically",
-                        "Download new versions automatically, install on restart",
-                    ))
-                    .text_size(13)
-                    .on_toggle(Message::AutoUpdateToggled),
-            )
-            .push(interval_row)
-            .push(
-                Text::new(
-                    "This is the only network connection PolterType makes. It fetches a small \
-                     version file from GitHub — no account, no identifier, nothing about you or \
-                     what you type. A new version is downloaded, checksum-verified and then left \
-                     alone until you quit or click \"Restart to update\" in the tray. Never \
-                     installed while you're typing.",
-                )
-                .size(11)
-                .color(b.muted),
-            )
-            .push(
-                Text::new(poltertype_update::MANIFEST_URL)
-                    .size(10)
-                    .font(Font::MONOSPACE)
-                    .color(b.muted),
-            );
-
-        // Beside the switch that turns updating on, because that is
-        // where the price is paid — the alternative is finding out
-        // after the restart, with the app silently deaf.
-        if let Some(note) = poltertype_shell::update_permission_note() {
-            updates = updates.push(Text::new(note).size(11).color(b.brand));
-        }
-
         let folders = Column::new()
             .spacing(12)
             .push(section_title(b, tr("general.folders", "Folders")))
@@ -1165,7 +1091,6 @@ impl SettingsApp {
             ))
             .push(card(behaviour))
             .push(card(appearance))
-            .push(card(updates))
             .push(card(folders))
             .into()
     }

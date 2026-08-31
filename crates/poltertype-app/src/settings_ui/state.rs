@@ -155,15 +155,6 @@ impl SettingsApp {
             None => (None, String::new()),
         };
 
-        // Plug-in configs live beside PolterType's config directory,
-        // not inside it — a plug-in is a separate program. Computed
-        // here because the struct literal below takes `config_path`.
-        let plugin_config_root = config_path
-            .parent()
-            .and_then(|d| d.parent())
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default();
-
         Self {
             settings,
             os_layouts,
@@ -181,13 +172,7 @@ impl SettingsApp {
             capturing: None,
             mod_capture: ModCapture::default(),
             exception_draft: String::new(),
-            plugins: {
-                let data_dir = poltertype_core::resolve_data_dir().unwrap_or_default();
-                super::plugin_pane::load_all(
-                    poltertype_core::plugins::extensions(&data_dir),
-                    &plugin_config_root,
-                )
-            },
+            plugins: Vec::new(),
             command_draft_name: String::new(),
             command_draft_trigger: String::new(),
             command_draft_action_kind: CommandActionKind::TypeText,
@@ -237,8 +222,7 @@ impl SettingsApp {
     /// partial-present path mis-tracks which swapchain buffer holds
     /// which frame — after a palette change the window blinks between
     /// themes and hover repaints can freeze. A full-window quad whose
-    /// colour never repeats marks the whole window damaged, so every
-    /// present redraws in full. The epsilon cycles a prime 251 steps of
+    /// colour never repeats marks the whole window damaged, so every    /// present redraws in full. The epsilon cycles a prime 251 steps of
     /// at most 1/1024, far below 8-bit output precision, so rendered
     /// pixels are identical frame to frame.
     ///

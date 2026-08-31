@@ -12,21 +12,100 @@
 //! sample belongs to the focused window by construction and carries
 //! neither an age nor a pid to prove it with.
 
+use std::cell::RefCell;
 use std::path::Path;
 use std::time::Duration;
 
 use tracing::{debug, warn};
 use windows::Win32::Foundation::{CloseHandle, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowRect, GetWindowThreadProcessId,
+    GUITHREADINFO, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongW,
+    GetWindowRect, GetWindowThreadProcessId,
 };
 use windows::core::PWSTR;
 
-use super::{CaretHint, FocusTracker};
+use super::{CaretHint, FocusTracker, SensitiveInput};
+
+const ES_PASSWORD_STYLE: u32 = 0x0020;
+
+struct UiaClient {
+    automation: IUIAutomation,
+}
+
+impl Drop for UiaClient {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize() };
+    }
+}
+
+thread_local! {
+    static UIA_CLIENT: RefCell<Option<UiaClient>> = const { RefCell::new(None) };
+}
+
+fn with_uia<T>(f: impl FnOnce(&IUIAutomation) -> Option<T>) -> Option<T> {
+    UIA_CLIENT.with(|slot| {
+        if slot.borrow().is_none() {
+            let created = unsafe {
+                CoInitializeEx(None, COINIT_MULTITHREADED).ok().ok()?;
+                let automation: IUIAutomation =
+                    CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+                Some(UiaClient { automation })
+            };
+            *slot.borrow_mut() = created;
+        }
+        let borrow = slot.borrow();
+        f(&borrow.as_ref()?.automation)
+    })
+}
+
+fn uia_password_state() -> Option<bool> {
+    with_uia(|automation| unsafe {
+        let focused = automation.GetFocusedElement().ok()?;
+        Some(focused.CurrentIsPassword().ok()?.as_bool())
+    })
+}
+
+fn native_password_state() -> Option<bool> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let thread = GetWindowThreadProcessId(hwnd, None);
+        if thread == 0 {
+            return None;
+        }
+        let mut gui = GUITHREADINFO {
+            cbSize: u32::try_from(size_of::<GUITHREADINFO>()).ok()?,
+            ..Default::default()
+        };
+        GetGUIThreadInfo(thread, &mut gui).ok()?;
+        if gui.hwndFocus.0.is_null() {
+            return None;
+        }
+
+        let mut class = [0u16; 128];
+        let len = GetClassNameW(gui.hwndFocus, &mut class);
+        if len <= 0 {
+            return None;
+        }
+        let class = String::from_utf16_lossy(&class[..len as usize]).to_ascii_lowercase();
+        if class != "edit" && !class.starts_with("richedit") {
+            return None;
+        }
+
+        let style = GetWindowLongW(gui.hwndFocus, GWL_STYLE) as u32;
+        Some(style & ES_PASSWORD_STYLE != 0)
+    }
+}
 
 pub struct WindowsFocusTracker;
 
@@ -141,6 +220,14 @@ impl FocusTracker for WindowsFocusTracker {
                 return None;
             }
             caret_hint_from(origin, gui.rcCaret, window)
+        }
+    }
+
+    fn sensitive_input(&self) -> SensitiveInput {
+        match uia_password_state().or_else(native_password_state) {
+            Some(true) => SensitiveInput::Sensitive,
+            Some(false) => SensitiveInput::NotSensitive,
+            None => SensitiveInput::Unknown,
         }
     }
 

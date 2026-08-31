@@ -26,8 +26,9 @@ poltertype-icon = { workspace = true }
 winresource     = { workspace = true }
 
 [features]
-default = []
-ai      = ["dep:poltertype-ai"]
+default       = []
+ai            = ["dep:poltertype-ai"]
+legacy-update = ["dep:poltertype-update"]
 
 [dependencies]
 poltertype-types  = { workspace = true }
@@ -35,7 +36,7 @@ poltertype-core   = { workspace = true }
 poltertype-input  = { workspace = true }
 poltertype-layout = { workspace = true }
 poltertype-detect = { workspace = true }
-poltertype-update = { workspace = true }
+poltertype-update = { workspace = true, optional = true }
 poltertype-popup  = { workspace = true }
 poltertype-tray   = { workspace = true }
 poltertype-autostart = { workspace = true }

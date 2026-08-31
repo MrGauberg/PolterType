@@ -9,11 +9,15 @@
 //! the file, comments included, comes back unchanged — that is
 //! [`poltertype_core::plugins::write_setting`]'s whole job.
 
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(test)]
+use poltertype_core::plugins::read_setting;
 use poltertype_core::plugins::{
-    ControlKind, DiscoveredExtension, PaneControl, SettingValue, read_setting, read_string_array,
-    write_setting, write_string_array,
+    ControlKind, DiscoveredExtension, PaneControl, SettingValue, read_string_array, write_setting,
+    write_string_array,
 };
 use tracing::warn;
 
@@ -454,6 +458,7 @@ impl PluginPane {
     /// `config_root` is the directory holding *per-application* config
     /// directories — the parent of ours. A plug-in is a separate
     /// program, so its config sits beside PolterType's, not inside it.
+    #[cfg(test)]
     pub fn load(ext: DiscoveredExtension, config_root: &Path) -> Self {
         let config_path = config_root
             .join(&ext.id)
@@ -596,7 +601,6 @@ impl PluginPane {
     pub fn action_running(&self, index: usize, row: usize) -> bool {
         self.running_action == Some((index, row))
     }
-
     /// Anything running at all — one at a time, because these steal
     /// focus and two of them would type into each other's window.
     pub fn any_action_running(&self) -> bool {
@@ -1071,6 +1075,7 @@ fn parse_list_rows(text: &str) -> Vec<ListRow> {
 ///
 /// A plug-in with no controls gets no section: an empty box with a
 /// name in it tells the user nothing and makes the list longer.
+#[cfg(test)]
 pub fn load_all(extensions: Vec<DiscoveredExtension>, config_root: &Path) -> Vec<PluginPane> {
     extensions
         .into_iter()

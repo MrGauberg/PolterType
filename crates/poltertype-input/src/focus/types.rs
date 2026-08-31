@@ -43,3 +43,15 @@ pub struct CaretHint {
     /// reports it. `None` when the backend could not ask.
     pub window: Option<(u32, u32)>,
 }
+
+/// Whether the focused text target is safe for keyboard-layout analysis.
+///
+/// `Unknown` is intentionally distinct from `NotSensitive`: the Work
+/// build fails closed on Windows when the OS cannot prove that the
+/// focused element is not a password/secure input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensitiveInput {
+    NotSensitive,
+    Sensitive,
+    Unknown,
+}

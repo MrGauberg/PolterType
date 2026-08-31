@@ -32,7 +32,6 @@ mod settings_proc;
 mod suggest_popup;
 mod tray;
 mod types;
-mod updater;
 mod user_dirs;
 
 use crate::bridges::*;
@@ -46,7 +45,6 @@ use crate::settings_proc::*;
 use crate::suggest_popup::*;
 use crate::tray::*;
 use crate::types::*;
-use crate::updater::*;
 use crate::user_dirs::*;
 
 use std::path::PathBuf;
@@ -341,13 +339,10 @@ fn main() -> Result<()> {
     // handle, so a swap reaches suggestions too.
     let dict_reload_handle = dictionary.handle();
     let suggester = build_suggester(&layouts, dictionary.handle());
-    let mut detectors: Vec<Box<dyn Detector>> = vec![
+    let detectors: Vec<Box<dyn Detector>> = vec![
         Box::new(dictionary),
         Box::new(build_plausibility_detector(&layouts)),
     ];
-    // Appended, never substituted: an AI plug-in only adds a voice. The
-    // gates it has to pass are in `detectors::build_ai_detectors`.
-    detectors.extend(build_ai_detectors(&settings.snapshot().ai));
 
     // ── Wordlist profile cache + focus watcher ───────────────────────
     //
@@ -527,18 +522,6 @@ fn main() -> Result<()> {
     }
     let item_pause = MenuItem::new(tray::pause_item_label(start_paused), true, None);
 
-    // One dual-purpose entry — "Check for updates…" or "⟳ Restart to
-    // update"; hidden entirely when `[updates].enabled` is off.
-    let updates_enabled = settings.snapshot().updates.enabled;
-    let mut update_pending = if updates_enabled {
-        report_previous_install_failure();
-        pending_for_this_build()
-    } else {
-        None
-    };
-    let item_update =
-        updates_enabled.then(|| MenuItem::new(menu_label(update_pending.as_ref()), true, None));
-
     let item_about = MenuItem::new(
         format!("About {APP_NAME} v{}", env!("CARGO_PKG_VERSION")),
         false,
@@ -563,31 +546,16 @@ fn main() -> Result<()> {
         &PredefinedMenuItem::separator(),
     ])
     .context("populate tray menu")?;
-    if let Some(item) = item_update.as_ref() {
-        menu.append_items(&[item, &PredefinedMenuItem::separator()])
-            .context("populate tray update entry")?;
-    }
     menu.append_items(&[&item_about, &item_quit])
         .context("populate tray menu tail")?;
 
-    // Plug-ins last, so the app's own entries keep their position and
-    // a plug-in can never push Quit off the bottom of the menu.
-    let discovered = poltertype_core::plugins::extensions(&data_dir);
-    let mut plugin_menu = plugins::PluginMenu::build(discovered, &menu)?;
+    // Privacy-first Work build: executable Extension plug-ins are not
+    // discovered by the tray runtime. Data-only packs are loaded by the
+    // layout database and remain supported.
+    let mut plugin_menu = plugins::PluginMenu::build(Vec::new(), &menu)?;
     let mut supervisor = plugins::Supervisor::new();
-    supervisor.start_all(plugin_menu.extensions());
-    for ext in plugin_menu.extensions() {
-        info!(
-            id = %ext.id,
-            version = %ext.version,
-            development = ext.development,
-            service = supervisor.is_running(&ext.id),
-            "plug-in loaded"
-        );
-    }
 
     let setup_id = item_setup.as_ref().map(|i| i.id().clone());
-    let update_id = item_update.as_ref().map(|i| i.id().clone());
     let settings_ui_id = item_settings_ui.id().clone();
     let settings_file_id = item_settings_file.id().clone();
     let logs_id = item_logs.id().clone();
@@ -693,20 +661,6 @@ fn main() -> Result<()> {
     let popup = create_popup(popup_event_tx);
     spawn_popup_bridge(event_loop.create_proxy(), popup_event_rx)?;
     let focus_for_popup = Arc::clone(&focus_tracker);
-
-    // The worker owns every network call this app makes; the event loop
-    // only sees results. `check_now_tx` cuts its sleep short, bounded at
-    // 1 because a double click wants one check, not a queue.
-    let (check_now_tx, check_now_rx) = bounded::<()>(1);
-    if updates_enabled {
-        spawn_update_worker(
-            event_loop.create_proxy(),
-            Arc::clone(&settings),
-            check_now_rx,
-        )?;
-    } else {
-        info!("automatic updates are disabled in config.toml; no update checks will be made");
-    }
 
     spawn_layout_poller(Arc::clone(&layout_switcher), engine_event_tx_for_poller)?;
     spawn_config_watcher(
@@ -842,52 +796,8 @@ fn main() -> Result<()> {
                     if let Some(mut listener) = input_listener.take() {
                         listener.stop();
                     }
-                    // Before anything on disk is replaced: a plug-in
-                    // service still running through an update would be
-                    // a process whose binary moved under it.
                     supervisor.stop_all();
-                    // The one safe moment: the user is done typing, the
-                    // hook is down, and nothing we replace is in use. No
-                    // relaunch — they asked for the app to go away.
-                    if let Some(pending) = update_pending.as_ref() {
-                        apply_now(pending, false);
-                    }
                     *control_flow = ControlFlow::Exit;
-                } else if Some(&id) == update_id.as_ref() {
-                    match update_pending.as_ref() {
-                        Some(pending) => {
-                            info!(version = %pending.version, "Restart to update clicked");
-                            // Hand off first and take the app down
-                            // second: nothing is waiting for this
-                            // process unless an installer really
-                            // started, and quitting anyway is what
-                            // turned a failed update into a machine
-                            // with no PolterType running on it.
-                            if apply_now(pending, true) {
-                                if let Some(mut listener) = input_listener.take() {
-                                    listener.stop();
-                                }
-                                // A plug-in service outliving the swap
-                                // is a process whose binary moved under
-                                // it — the same reason Quit stops them.
-                                supervisor.stop_all();
-                                *control_flow = ControlFlow::Exit;
-                            } else {
-                                // Re-read rather than assume: a
-                                // discarded update is gone from disk,
-                                // a failed hand-off is still staged,
-                                // and the menu must say which.
-                                update_pending = pending_for_this_build();
-                                if let Some(item) = item_update.as_ref() {
-                                    refresh_menu_item(item, update_pending.as_ref());
-                                }
-                            }
-                        }
-                        None => {
-                            info!("manual update check");
-                            let _ = check_now_tx.try_send(());
-                        }
-                    }
                 } else if id == settings_ui_id {
                     spawn_settings_ui(SettingsCloseDeps {
                         settings: Arc::clone(&settings_for_loop),
@@ -1044,31 +954,6 @@ fn main() -> Result<()> {
                     let _ = cmd_tx_for_loop.send(EngineCommand::DismissSuggestions { generation });
                 }
             },
-            Event::UserEvent(UserEvent::Update(outcome)) => {
-                match outcome {
-                    UpdateOutcome::Staged(pending) => {
-                        // Once, on the transition — the worker stages a
-                        // given version only once, so nobody is nagged.
-                        let already_known = update_pending
-                            .as_ref()
-                            .is_some_and(|p| p.version == pending.version);
-                        update_pending = Some(*pending);
-                        if !already_known {
-                            if let Some(p) = update_pending.as_ref() {
-                                spawn_update_notification(&p.version);
-                            }
-                        }
-                    }
-                    UpdateOutcome::UpToDate | UpdateOutcome::Cleared => update_pending = None,
-                    // Already logged by the worker. A failed check is not
-                    // news, and it must not cost a user the button to
-                    // install an update that is already staged.
-                    UpdateOutcome::Failed => {}
-                }
-                if let Some(item) = item_update.as_ref() {
-                    refresh_menu_item(item, update_pending.as_ref());
-                }
-            }
             _ => {}
         }
     });

@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, select_biased};
-use poltertype_input::{KeyDirection, KeyEvent};
+use poltertype_input::{KeyDirection, KeyEvent, SensitiveInput};
 use tracing::{debug, info};
 
 use crate::audio::SoundEvent;
@@ -83,7 +83,6 @@ impl SwitcherEngine {
                             // A machine left alone must not still hold
                             // a sentence, and a trigger must not fire
                             // from words typed before a long pause.
-                            self.word_history.write().clear();
                             self.dismiss_suggestions(None);
                         }
                     }
@@ -325,6 +324,17 @@ impl SwitcherEngine {
             // `consume_echo` in the run loop).
             return;
         }
+
+        if blocks_sensitive_input(
+            self.settings.snapshot().engine.ignore_in_password_fields,
+            self.focus_tracker.sensitive_input(),
+        ) {
+            buffer.reset();
+            *self.last_word.write() = None;
+            *self.word_layout.write() = None;
+            self.dismiss_suggestions(None);
+            return;
+        }
         // No paused early-return here. Pause is about *auto*-switching,
         // and a buffer that stops tracking while it is on takes the
         // manual hotkey down with it: the stash is written at a word
@@ -435,5 +445,23 @@ impl SwitcherEngine {
                 }
             }
         }
+    }
+}
+
+fn blocks_sensitive_input(enabled: bool, state: SensitiveInput) -> bool {
+    enabled && !matches!(state, SensitiveInput::NotSensitive)
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_input_guard_fails_closed() {
+        assert!(!blocks_sensitive_input(false, SensitiveInput::Sensitive));
+        assert!(!blocks_sensitive_input(false, SensitiveInput::Unknown));
+        assert!(!blocks_sensitive_input(true, SensitiveInput::NotSensitive));
+        assert!(blocks_sensitive_input(true, SensitiveInput::Sensitive));
+        assert!(blocks_sensitive_input(true, SensitiveInput::Unknown));
     }
 }

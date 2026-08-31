@@ -227,4 +227,3 @@ opt-level     = 3
 # — the app's own crates are what get recompiled while working.
 [profile.dev.package."*"]
 opt-level = 3
-

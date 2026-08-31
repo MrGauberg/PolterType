@@ -1,5 +1,5 @@
-//! Per-completed-word decision: candidate filtering, smart-command
-//! lookup, the pre-decision filters, and the detector pipeline.
+//! Per-completed-word decision: candidate filtering, pre-decision
+//! filters, and the local detector pipeline.
 
 use crossbeam_channel::Receiver;
 use poltertype_detect::{Verdict, letters_only_lower, looks_like_code_token};
@@ -8,7 +8,6 @@ use poltertype_layout::LayoutId;
 use poltertype_types::{SwitchAction, logsafe};
 use tracing::{debug, warn};
 
-use crate::commands::{erase_len, find_matching_command};
 use crate::engine::buffer::WordBuffer;
 use crate::engine::enums::SwitcherEvent;
 use crate::engine::heuristics::{
@@ -223,37 +222,6 @@ impl SwitcherEngine {
             });
             return;
         }
-
-        // Before the auto-switch filters: expansion is a direct user
-        // intent, not a guess. Matching is on the *current* layout's
-        // rendering, so the same physical keys under another layout fall
-        // through to layout-correction.
-        let focused_basename = self.focus_tracker.focused_exe().and_then(|exe| {
-            std::path::Path::new(&exe)
-                .file_name()
-                .and_then(|f| f.to_str())
-                .map(str::to_owned)
-        });
-        let history = self.word_history.read().clone();
-        if let Some(cmd) = find_matching_command(
-            &snap.commands,
-            &current_text,
-            focused_basename.as_deref(),
-            &history,
-        ) {
-            // Counting keys rather than rendered chars survives
-            // scancodes the mapping table cannot render.
-            self.dispatch_smart_command(cmd, erase_len(cmd, keys.len()), boundary_char);
-            // The trigger text is gone from screen: not re-openable by
-            // backspace, not matchable again.
-            buffer.forget_completed();
-            self.word_history.write().clear();
-            return;
-        }
-        // Not a trigger — remember it as a possible first half.
-        self.word_history
-            .write()
-            .push_in(focused_basename.as_deref(), &current_text);
 
         // Pre-decision filters, automatic decisions only. The manual
         // switch-last hotkey calls `force_switch_last` and bypasses

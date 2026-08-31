@@ -2002,7 +2002,7 @@ mod engine_integration_tests {
         h.cmd_tx
             .send(EngineCommand::SwitchLastForcefully)
             .expect("engine alive");
-        h.wait_for(|e| matches!(e, SwitcherEvent::AddToDictionary { .. }));
+        h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
         assert_eq!(
             *h.switcher.switches.lock(),
@@ -2083,7 +2083,7 @@ mod engine_integration_tests {
         // double-tap window, which is why nothing settles in between.
         h.tap(L_SHIFT);
         h.tap(L_SHIFT);
-        h.wait_for(|e| matches!(e, SwitcherEvent::AddToDictionary { .. }));
+        h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
 
         assert_eq!(
@@ -2132,47 +2132,34 @@ mod engine_integration_tests {
         );
     }
 
-    /// The manual hotkey after one of our own corrections puts the word
-    /// back (re-applying the same correction deleted it and retyped it
-    /// identically) and takes the rescued word into the user's
-    /// dictionary — the only route the auto-correction path has in.
+    /// Undo must restore the word but must never persist it implicitly.
+    /// Work builds learn vocabulary only through an explicit
+    /// "Add to dictionary" action or direct Wordlists editing.
     #[test]
-    fn manual_hotkey_undoes_a_correction_and_learns_the_word() {
+    fn manual_hotkey_undoes_a_correction_without_learning_the_word() {
         let h = Harness::start(60_000);
         type_word(&h, &GHBDSN);
         h.tap(SPACE);
         h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
-        assert_eq!(
-            *h.switcher.switches.lock(),
-            vec![LayoutId::from("uk-UA")],
-            "precondition: the engine corrected into uk-UA"
-        );
 
         h.cmd_tx
             .send(EngineCommand::SwitchLastForcefully)
             .expect("engine alive");
-        let ev = h.wait_for(|e| matches!(e, SwitcherEvent::AddToDictionary { .. }));
-        let SwitcherEvent::AddToDictionary {
-            layout,
-            word,
-            origin,
-        } = ev
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            layout,
-            LayoutId::from("en-US"),
-            "learn it where it was typed"
-        );
-        assert_eq!(word, "ghbdsn");
-        assert_eq!(origin, DictionaryAddOrigin::UndoneCorrection);
         h.settle();
+
+        let switches = h.switcher.switches.lock().clone();
+        let (_, events) = h.stop();
         assert_eq!(
-            *h.switcher.switches.lock(),
+            switches,
             vec![LayoutId::from("uk-UA"), LayoutId::from("en-US")],
-            "the undo has to switch the layout back too"
+            "the undo still has to restore the original layout"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SwitcherEvent::AddToDictionary { .. })),
+            "undo is not consent to persist typed text"
         );
     }
 
@@ -2214,12 +2201,11 @@ mod engine_integration_tests {
         );
     }
 
-    /// Counter-regression: with no dictionary evidence behind the
-    /// correction, the undo still means "this is a word" and still
-    /// teaches it. Without this the guard would silently retire the
-    /// auto-correction path's only escape hatch.
+    /// Even when a correction was only a heuristic guess, undo remains
+    /// a transient correction gesture and does not write the rescued
+    /// token to disk.
     #[test]
-    fn manual_hotkey_undo_still_learns_when_the_switch_was_a_guess() {
+    fn manual_hotkey_undo_never_learns_when_the_switch_was_a_guess() {
         let h = Harness::start_full(
             60_000,
             MockEmitter::default(),
@@ -2235,12 +2221,15 @@ mod engine_integration_tests {
         h.cmd_tx
             .send(EngineCommand::SwitchLastForcefully)
             .expect("engine alive");
-        let ev = h.wait_for(|e| matches!(e, SwitcherEvent::AddToDictionary { .. }));
-        let SwitcherEvent::AddToDictionary { layout, word, .. } = ev else {
-            unreachable!()
-        };
-        assert_eq!(layout, LayoutId::from("en-US"));
-        assert_eq!(word, "ghbdsn");
+        h.settle();
+
+        let (_, events) = h.stop();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SwitcherEvent::AddToDictionary { .. })),
+            "heuristic undo must not persist the typed token either"
+        );
     }
 
     /// Pause stops the engine deciding, not the engine watching.
@@ -2409,7 +2398,6 @@ mod engine_integration_tests {
             .expect("engine alive");
         h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
-
         assert_eq!(
             *h.switcher.switches.lock(),
             vec![LayoutId::from("uk-UA")],
@@ -2503,12 +2491,10 @@ mod engine_integration_tests {
         );
     }
 
-    /// Undoing an engine correction teaches the word; taking back a
-    /// press of the user's own must not. A third press has the shape of
-    /// an undo — `corrected_to` is set — but it was this hotkey that
-    /// set it, and taking back your own press says nothing about the
-    /// word. Without `user_placed` a user tapping through the
-    /// renderings would silently disable correction for it forever.
+    /// Manual layout cycling is always transient in the Work build.
+    /// Undoing the engine's correction, rotating back, and taking back
+    /// the user's own press must all leave the persistent dictionary
+    /// untouched.
     #[test]
     fn taking_back_your_own_press_does_not_teach_the_dictionary() {
         let h = Harness::start(60_000);
@@ -2517,12 +2503,11 @@ mod engine_integration_tests {
         h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
 
-        // One: undo the engine, which teaches — the escape hatch pinned
-        // by `manual_hotkey_undo_still_learns_when_the_switch_was_a_guess`.
+        // One: undo the engine correction without persisting the word.
         h.cmd_tx
             .send(EngineCommand::SwitchLastForcefully)
             .expect("engine alive");
-        h.wait_for(|e| matches!(e, SwitcherEvent::AddToDictionary { .. }));
+        h.wait_for(|e| matches!(e, SwitcherEvent::Corrected { .. }));
         h.settle();
         // Two: rotate back to where the engine had put it.
         h.cmd_tx
@@ -2544,7 +2529,7 @@ mod engine_integration_tests {
             .count();
         assert_eq!(
             taught, 0,
-            "only the press that undid the engine's own correction teaches"
+            "manual layout cycling must never persist the typed word"
         );
     }
 
@@ -3013,9 +2998,7 @@ mod engine_integration_tests {
     }
 
     /// Issue #52: `№` is `Shift+3`, which is not a letter in any
-    /// layout — so it never joins a word, never reaches the stash, and
-    /// the hotkey found nothing to switch. The key is known all the
-    /// same, and one character is exactly what the report asked for.
+    /// layout — so it never joins a word, never reaches the stash, and    /// the hotkey found nothing to switch. The key is known all the    /// same, and one character is exactly what the report asked for.
     #[test]
     fn the_hotkey_switches_a_separator_when_there_is_no_word() {
         let h = Harness::start(60_000);

@@ -43,6 +43,7 @@ mod types;
 pub use clipboard::{Clipboard, ClipboardGap, clipboard, selection_support};
 pub use enums::*;
 pub use factory::*;
+pub use focus::SensitiveInput;
 pub use gate::*;
 pub use hotkey_env::*;
 pub use traits::*;

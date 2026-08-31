@@ -19,7 +19,7 @@ use crate::engine::consts::{
     LAYOUT_SETTLE, PASTE_CHORD, PASTE_GUARD, PASTE_SETTLE, POST_EMIT_LAG, SC_BACKSPACE, SC_SPACE,
     SELECTION_COPY_WAIT, SWITCH_HOLD_PROBES, SWITCH_HOLD_STEP,
 };
-use crate::engine::enums::{DictionaryAddOrigin, SwitcherEvent};
+use crate::engine::enums::SwitcherEvent;
 use crate::engine::heuristics::{boundary_key_for, is_paste_shortcut, is_submission_scancode};
 use crate::engine::types::{Correction, HeldKeys, LastWord, WindowDrain};
 
@@ -28,8 +28,6 @@ use super::engine::SwitcherEngine;
 /// Shortest word an undone correction may teach the dictionary. Same
 /// three-letter floor the suggestion tooltip uses, for the same
 /// reason: below it the engine is not working from the FST at all.
-const MIN_LEARNED_LETTERS: usize = 3;
-
 impl SwitcherEngine {
     /// Type out keystrokes the key gate held back, by whichever emit
     /// path this backend has.
@@ -1059,8 +1057,7 @@ impl SwitcherEngine {
 
     /// The manual switch-last hotkey, in both of its situations.
     ///
-    /// **The engine already switched the word**: put it back, and teach
-    /// the word (see [`Self::learn_undone_word`]). Re-applying the same
+    /// **The engine already switched the word**: put it back. Re-applying the same
     /// correction would make the one gesture a user reaches for when a
     /// correction is wrong do visibly nothing.
     ///
@@ -1165,9 +1162,6 @@ impl SwitcherEngine {
         if !applied {
             return false;
         }
-        if undoing {
-            self.learn_undone_word(&target, &restored, &from, &on_screen);
-        }
         // Put back what is now on screen, so the hotkey can be pressed
         // again (issue #37): getting here consumed the stash, and
         // without this the second press finds nothing and the gesture
@@ -1197,17 +1191,14 @@ impl SwitcherEngine {
     ///
     /// `№` is `Shift+3` on the Russian and Ukrainian layouts and `#` on
     /// the US one. It is not a letter, so it never joins a word, never
-    /// reaches the stash, and the manual hotkey had nothing to act on —
-    /// while the key that produced it is perfectly well known. One
+    /// reaches the stash, and the manual hotkey had nothing to act on —    /// while the key that produced it is perfectly well known. One
     /// character only: what the report asked for is the separator
     /// immediately left of the caret, and a run of them is as likely to
     /// be a divider line as a mistake.
     ///
     /// Returns `false` — leaving the text alone — whenever the switch
     /// would be pointless or destructive rather than wrong: a key that
-    /// reads the same under both layouts (every space is a space), and
-    /// the submission keys, whose replay would send the line or move
-    /// focus instead of typing a character.
+    /// reads the same under both layouts (every space is a space), and    /// the submission keys, whose replay would send the line or move    /// focus instead of typing a character.
     pub(super) fn force_switch_separator(
         &self,
         buffer: &mut WordBuffer,
@@ -1260,74 +1251,5 @@ impl SwitcherEngine {
             },
             Some((key_rx, buffer)),
         )
-    }
-
-    /// Remember a word the user just rescued from a correction — the
-    /// auto-correction path's only escape hatch, since "Add to
-    /// dictionary" lives on a tooltip that appears only for words the
-    /// engine *kept*.
-    ///
-    /// Short tokens are skipped: below three letters the dictionary runs
-    /// on the curated short-stop lists rather than the FST, and a stray
-    /// entry there disables correction for a whole class of real words.
-    fn learn_undone_word(&self, target: &LayoutId, restored: &str, from: &LayoutId, undone: &str) {
-        let letters = poltertype_detect::letters_only_lower(restored);
-        if letters.chars().count() < MIN_LEARNED_LETTERS {
-            debug!(
-                letters = letters.chars().count(),
-                "undone word is too short to learn — leaving the dictionary alone"
-            );
-            return;
-        }
-        if !self.undo_vouches_for_word(target, restored, from, undone) {
-            debug!(
-                %target,
-                %from,
-                word = %logsafe::redact_word(restored),
-                "undo of a dictionary-backed correction — not learning it as a word"
-            );
-            return;
-        }
-        debug!(
-            %target,
-            word = %logsafe::redact_word(restored),
-            "learning a word from an undone correction"
-        );
-        let _ = self.out_tx.send(SwitcherEvent::AddToDictionary {
-            layout: target.clone(),
-            word: restored.to_owned(),
-            origin: DictionaryAddOrigin::UndoneCorrection,
-        });
-    }
-
-    /// Does this undo claim "the restored text is a word of `target`",
-    /// or only "not this one, not now"?
-    ///
-    /// A claim, when `target` already knows the word — an overlay entry
-    /// then promotes it past a `weak` flag or a short-list gap — or when
-    /// `from` does *not* know what was on screen, meaning the engine
-    /// switched on word shape rather than on dictionary evidence.
-    ///
-    /// Otherwise the correction rested on a real word of the other
-    /// language and the restored text is that word's wrong-layout twin.
-    /// Learning it writes gibberish into the dictionary for good:
-    /// `ghbdsn` (uk-UA `привіт` under en-US) and `ефілі` (en-US `tasks`
-    /// under uk-UA) both arrived that way, from undos of corrections the
-    /// engine had got right, and each then broke the real word.
-    ///
-    /// No suggestion provider means no dictionary to ask, which fails
-    /// open; `DictionaryDetector::judge` stops a stray entry outranking
-    /// a real word either way.
-    fn undo_vouches_for_word(
-        &self,
-        target: &LayoutId,
-        restored: &str,
-        from: &LayoutId,
-        undone: &str,
-    ) -> bool {
-        let Some(provider) = self.suggester.as_ref() else {
-            return true;
-        };
-        provider.is_known(target, restored) || !provider.is_known(from, undone)
     }
 }
