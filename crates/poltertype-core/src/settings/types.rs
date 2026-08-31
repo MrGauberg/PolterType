@@ -49,8 +49,9 @@ pub struct Settings {
     /// See [`SuggestionSettings`].
     #[serde(default)]
     pub suggestions: SuggestionSettings,
-    /// Background update checks against GitHub Releases. The **only**
-    /// network access a default build performs — see [`UpdateSettings`].
+    /// Legacy update settings retained so older `config.toml` files
+    /// remain readable. The privacy-first Work app has no updater
+    /// runtime and ignores this section.
     #[serde(default)]
     pub updates: UpdateSettings,
     /// Converting a *selected* passage rather than the last word.
@@ -140,7 +141,7 @@ pub struct GeneralSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
-            autostart: true,
+            autostart: false,
             sound_on_correct: true,
             show_notifications: false,
             ui_language: "system".into(),
@@ -316,20 +317,16 @@ impl SuggestionSettings {
     }
 }
 
-/// Automatic updates from GitHub Releases — the one place a default
-/// build talks to the network.
+/// Legacy updater configuration kept for backwards-compatible parsing.
 ///
-/// GitHub sees what any HTTP server sees: the connecting IP and a
-/// User-Agent naming the running version. No request body, no query
-/// string, nothing about the user. **This is not telemetry and it does
-/// not become telemetry.** `enabled = false` switches all of it off
-/// permanently, with no residual "just one check on startup".
+/// The privacy-first Work app does not link or start an updater. New
+/// profiles therefore serialize this as disabled as an explicit
+/// statement of the Work-build contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct UpdateSettings {
-    /// Check for, download and stage new releases in the background. On
-    /// by default: an opt-in nobody finds leaves users on old builds of
-    /// an *unsigned* app, which is the worse security posture.
+    /// Legacy switch. The Work app ignores it; false is the shipped
+    /// default so fresh profiles do not claim a network capability.
     pub enabled: bool,
     /// Hours between checks. Clamped to a sane floor at read time
     /// (see [`UpdateSettings::interval`]) so a hand-edited `0` cannot
@@ -340,7 +337,7 @@ pub struct UpdateSettings {
 impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             check_interval_hours: 24,
         }
     }

@@ -14,6 +14,8 @@ fn missing_keys_use_defaults() {
     let s: Settings = toml::from_str("schema_version = 1").expect("parse");
     assert_eq!(s.engine.min_word_length, 3);
     assert_eq!(s.general.log_level, "info");
+    assert!(!s.general.autostart);
+    assert!(!s.updates.enabled);
     assert!(!s.ai.enabled);
     assert!(s.engine.suppress_in_identifiers);
     assert!(s.engine.suppress_for_all_caps);
@@ -34,16 +36,13 @@ fn old_config_missing_new_field_still_parses() {
     assert!(s.engine.suppress_for_all_caps);
 }
 
-/// Every user upgrading from 0.3.x has a `config.toml` with no
-/// `[updates]` section at all. It has to keep working, and it has to
-/// land on "updates on" — a silent fallback to *off* would mean the
-/// exact population that most needs the updater (people already running
-/// an old build) never gets it.
+/// Work builds keep parsing the legacy updater section, but a config
+/// predating it must not silently claim that networking is enabled.
 #[test]
-fn a_config_predating_the_updater_defaults_to_updates_on() {
+fn a_config_predating_the_updater_defaults_to_updates_off() {
     let raw = "schema_version = 1\n\n[general]\nautostart = true\n";
     let s: Settings = toml::from_str(raw).expect("parse");
-    assert!(s.updates.enabled);
+    assert!(!s.updates.enabled);
     assert_eq!(s.updates.check_interval_hours, 24);
 }
 
