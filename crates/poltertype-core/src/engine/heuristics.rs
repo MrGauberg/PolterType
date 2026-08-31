@@ -182,6 +182,30 @@ pub fn is_structural_boundary(ch: char) -> bool {
     matches!(ch, ':' | '/' | '\\' | '@' | '=' | '#' | '&')
 }
 
+/// Sentence punctuation that can appear as a structural symbol while
+/// the wrong layout is active. Russian `?` is Shift+7; that physical
+/// key renders as `&` under en-US.
+pub fn is_sentence_punctuation(ch: char) -> bool {
+    matches!(ch, '.' | ',' | '!' | '?')
+}
+
+/// Render one physical boundary key under a candidate target layout.
+pub fn boundary_char_in_layout(
+    layouts: &LayoutDb,
+    target: &LayoutId,
+    scancode: u32,
+    shift: bool,
+) -> Option<char> {
+    layouts
+        .get(target)?
+        .translate_key(poltertype_types::WordKey {
+            scancode,
+            shift,
+            caps: false,
+            timestamp_ms: 0,
+        })
+}
+
 /// A boundary that *submits* or *navigates* rather than separating
 /// words mid-line. Auto-correction re-emits the boundary after the
 /// corrected word, and re-pressing one of these runs a command or moves

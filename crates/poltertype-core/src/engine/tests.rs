@@ -290,6 +290,27 @@ mod engine_integration_tests {
             accept_modifiers: Option<&str>,
             tweak: impl FnOnce(&mut crate::settings::Settings),
         ) -> Self {
+            Self::start_configured_pair(
+                idle_timeout_ms,
+                emitter,
+                fail_switch,
+                suggester,
+                detectors_override,
+                (accept_modifiers, "uk-UA"),
+                tweak,
+            )
+        }
+
+        fn start_configured_pair(
+            idle_timeout_ms: u64,
+            emitter: MockEmitter,
+            fail_switch: bool,
+            suggester: Option<Arc<dyn poltertype_detect::SuggestionProvider>>,
+            detectors_override: Option<Vec<Box<dyn Detector>>>,
+            pair_options: (Option<&str>, &str),
+            tweak: impl FnOnce(&mut crate::settings::Settings),
+        ) -> Self {
+            let (accept_modifiers, other_layout) = pair_options;
             let mut settings = crate::settings::Settings::default();
             settings.engine.idle_timeout_ms = idle_timeout_ms;
             if let Some(m) = accept_modifiers {
@@ -303,7 +324,7 @@ mod engine_integration_tests {
             // which keys count as letters. bg-BG puts `б` on the `/`
             // key, which quietly made `/tmp` one four-key token here
             // while a real en-US + uk-UA machine sees a path.
-            let active = [LayoutId::from("en-US"), LayoutId::from("uk-UA")];
+            let active = [LayoutId::from("en-US"), LayoutId::from(other_layout)];
             let layouts = Arc::new(
                 LayoutDb::load(crate::layouts::LoadOptions {
                     active_filter: Some(&active),
@@ -312,13 +333,13 @@ mod engine_integration_tests {
                 .expect("bundled layouts load"),
             );
             let emitter = Arc::new(emitter);
-            let mut switcher = MockSwitcher::new("en-US", &["en-US", "uk-UA"]);
+            let mut switcher = MockSwitcher::new("en-US", &["en-US", other_layout]);
             switcher.fail_switch = fail_switch;
             let switcher = Arc::new(switcher);
             let detectors: Vec<Box<dyn Detector>> = detectors_override.unwrap_or_else(|| {
                 vec![Box::new(AlwaysOther(
                     LayoutId::from("en-US"),
-                    LayoutId::from("uk-UA"),
+                    LayoutId::from(other_layout),
                 ))]
             });
             let (audio, audio_rx) = crate::audio::AudioPlayer::for_tests();
@@ -592,6 +613,38 @@ mod engine_integration_tests {
         }
     }
 
+    /// Press the physical keys that would produce `text` under
+    /// `layout`, while the mock OS can still be on another layout.
+    /// This models the real wrong-layout mistake including punctuation:
+    /// Russian `?` is Shift+7, which renders as `&` under en-US.
+    fn type_as_layout(h: &Harness, layout: &str, text: &str) {
+        use crate::layouts::LayoutDb;
+        let layouts = LayoutDb::load_embedded();
+        let m = layouts
+            .get(&LayoutId::from(layout))
+            .unwrap_or_else(|| panic!("missing layout {layout}"));
+        for ch in text.chars() {
+            let (sc, shift) = if ch == ' ' {
+                (SPACE, false)
+            } else {
+                m.keys
+                    .iter()
+                    .find_map(|(&sc, &(plain, shifted))| {
+                        if plain == ch {
+                            Some((sc, false))
+                        } else if shifted == Some(ch) {
+                            Some((sc, true))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| panic!("no {layout} scancode for {ch:?}"))
+            };
+            h.key(sc, KeyDirection::Press, shift);
+            h.key(sc, KeyDirection::Release, shift);
+        }
+    }
+
     /// Regression: a domain was switched **twice** — once to mangle the
     /// host, then back on the next prose word. `.` is `ю` in uk-UA, so a
     /// host stays one token and its en-US rendering scored 0.00 against
@@ -852,6 +905,78 @@ mod engine_integration_tests {
                 EmitOp::Backspaces(7),
                 EmitOp::Keys(GHBDSN.iter().copied().chain([SPACE]).collect()),
             ]
+        );
+    }
+
+    /// Baseline paired with the punctuation regression: the same
+    /// Russian word followed by an ordinary space already worked and
+    /// must keep working.
+    #[test]
+    fn russian_word_with_space_still_auto_switches() {
+        let h = Harness::start_configured_pair(
+            60_000,
+            MockEmitter::default(),
+            false,
+            None,
+            Some(real_detectors()),
+            (None, "ru-RU"),
+            |_| {},
+        );
+        type_as_layout(&h, "ru-RU", "доступен ");
+        h.settle();
+        assert_eq!(
+            *h.switcher.switches.lock(),
+            vec![LayoutId::from("ru-RU")],
+            "`доступен ` must retain the pre-existing auto-switch behaviour"
+        );
+    }
+
+    /// A genuine structural suffix must still veto a forced detector
+    /// decision when the same key remains structural in the target.
+    #[test]
+    fn structural_suffix_that_stays_structural_still_blocks_auto_switch() {
+        let h = Harness::start(60_000);
+        type_en_us(&h, "ghbdsn=");
+        h.settle();
+        assert!(
+            h.switcher.switches.lock().is_empty(),
+            "a genuine `=` suffix must remain protected from auto-switch"
+        );
+    }
+
+    /// Exact user regression: with en-US active, the physical keys for
+    /// Russian `доступен?` render as `ljcnegty&`. The trailing `&`
+    /// must not be mistaken for a URL/code separator when that same key
+    /// becomes `?` after the confident switch to ru-RU.
+    #[test]
+    fn russian_question_mark_after_wrong_layout_word_still_auto_switches() {
+        let h = Harness::start_configured_pair(
+            60_000,
+            MockEmitter::default(),
+            false,
+            None,
+            Some(real_detectors()),
+            (None, "ru-RU"),
+            |_| {},
+        );
+        type_as_layout(&h, "ru-RU", "доступен?");
+        h.settle();
+
+        assert_eq!(
+            *h.switcher.switches.lock(),
+            vec![LayoutId::from("ru-RU")],
+            "`доступен?` typed with en-US active must auto-switch to ru-RU"
+        );
+
+        let layouts = LayoutDb::load_embedded();
+        let ru = layouts.get(&LayoutId::from("ru-RU")).expect("ru-RU");
+        let expected_question = ru.key_for_char('?').expect("ru-RU question mark key");
+        let replays = h.emitter.replays.lock().clone();
+        let last = replays.last().expect("correction replay");
+        assert_eq!(
+            last.last().copied(),
+            Some(expected_question),
+            "the replay must end with the ru-RU key that produces `?`"
         );
     }
 

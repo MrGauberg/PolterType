@@ -11,8 +11,9 @@ use tracing::{debug, warn};
 use crate::engine::buffer::WordBuffer;
 use crate::engine::enums::SwitcherEvent;
 use crate::engine::heuristics::{
-    app_is_disabled, boundary_key_for, is_layout_eligible, is_structural_boundary,
-    is_submission_boundary, looks_like_all_caps, render_for_code_check,
+    app_is_disabled, boundary_char_in_layout, boundary_key_for, is_layout_eligible,
+    is_sentence_punctuation, is_structural_boundary, is_submission_boundary, looks_like_all_caps,
+    render_for_code_check,
 };
 use crate::engine::types::{Correction, LastWord, WordBoundaryKey};
 
@@ -263,10 +264,18 @@ impl SwitcherEngine {
             return;
         }
 
-        // Filter 0b: structural boundary (`:` `/` `\` `@` `=` `#` `&`)
-        // means URL / path / email / code, not prose. Switching `http`
-        // to `реез` would corrupt what the user is half-way through.
-        if is_structural_boundary(boundary_char) {
+        // Filter 0b: structural suffixes usually mean URL / path /
+        // email / code. One exception is punctuation whose physical key
+        // changes meaning with the layout: Russian `?` is Shift+7,
+        // which appears as `&` under en-US. If any candidate turns this
+        // exact key into sentence punctuation, defer the veto until the
+        // detector names its target.
+        let structural_suffix_can_be_sentence_punctuation = is_structural_boundary(boundary_char)
+            && candidates.iter().any(|(layout, _)| {
+                boundary_char_in_layout(&self.layouts, layout, boundary_scancode, boundary_shift)
+                    .is_some_and(is_sentence_punctuation)
+            });
+        if is_structural_boundary(boundary_char) && !structural_suffix_can_be_sentence_punctuation {
             debug!(
                 token = %logsafe::redact_word(&current_text),
                 boundary = %boundary_char,
@@ -404,17 +413,36 @@ impl SwitcherEngine {
                     .find(|(l, _)| l == &v.best_layout)
                     .map(|(_, t)| t.clone())
                     .unwrap_or_default();
-                // The boundary key already reached the focused app, so
-                // it has to be deleted and re-emitted after the word.
-                let mut corrected_with_boundary = target_text;
-                corrected_with_boundary.push(boundary_char);
-                SwitchAction::SwitchAndReplay {
-                    target_layout: v.best_layout,
-                    corrected_text: corrected_with_boundary,
-                    // Keys, not rendered chars: under-counting is how
-                    // word heads get left behind.
-                    backspaces: keys.len() + 1,
-                    reason: v.reason,
+
+                let target_boundary = boundary_char_in_layout(
+                    &self.layouts,
+                    &v.best_layout,
+                    boundary_scancode,
+                    boundary_shift,
+                );
+                let reinterpret_structural_boundary = is_structural_boundary(boundary_char)
+                    && target_boundary.is_some_and(is_sentence_punctuation);
+
+                if is_structural_boundary(boundary_char) && !reinterpret_structural_boundary {
+                    SwitchAction::KeepCurrent {
+                        reason: format!(
+                            "structural boundary `{boundary_char}` after {} remains structural in target layout",
+                            logsafe::redact_word(&current_text)
+                        ),
+                    }
+                } else {
+                    let mut corrected_with_boundary = target_text;
+                    corrected_with_boundary.push(
+                        target_boundary
+                            .filter(|_| reinterpret_structural_boundary)
+                            .unwrap_or(boundary_char),
+                    );
+                    SwitchAction::SwitchAndReplay {
+                        target_layout: v.best_layout,
+                        corrected_text: corrected_with_boundary,
+                        backspaces: keys.len() + 1,
+                        reason: v.reason,
+                    }
                 }
             }
             Some(Verdict::Switch(v)) => {
@@ -470,13 +498,25 @@ impl SwitcherEngine {
                 // Not the key as typed: under the target layout that
                 // scancode may well be another character. See
                 // `boundary_key_for`.
-                let (replay_sc, replay_shift) = boundary_key_for(
+                let target_boundary = boundary_char_in_layout(
                     &self.layouts,
                     &target_layout,
                     boundary_scancode,
                     boundary_shift,
-                    boundary_char,
                 );
+                let reinterpret_structural_boundary = is_structural_boundary(boundary_char)
+                    && target_boundary.is_some_and(is_sentence_punctuation);
+                let (replay_sc, replay_shift) = if reinterpret_structural_boundary {
+                    (boundary_scancode, boundary_shift)
+                } else {
+                    boundary_key_for(
+                        &self.layouts,
+                        &target_layout,
+                        boundary_scancode,
+                        boundary_shift,
+                        boundary_char,
+                    )
+                };
                 replay.push(ReplayKey {
                     scancode: replay_sc,
                     shift: replay_shift,
